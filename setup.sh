@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BOLD='\033[1m'
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+DIM='\033[2m'
+RESET='\033[0m'
+
 PROJECT_ID="$1"
 
 if [ -n "${2:-}" ]; then
@@ -10,10 +18,10 @@ else
     PRINT_FILE=$(cat ~/.bash_history | grep cloudshell_open | grep -oP '(?<=--print_file[=\s])\S+' | tail -1 | tr -d '"')
 
     if [ -z "$PRINT_FILE" ]; then
-        echo "Could not detect GitHub repository from Cloud Shell history."
+        echo -e "${YELLOW}Could not detect GitHub repository from Cloud Shell history.${RESET}"
         read -r -p "Enter the GitHub repository (e.g. owner/repo): " PRINT_FILE
         if [ -z "$PRINT_FILE" ]; then
-            echo "No GitHub repository provided, exiting."
+            echo -e "${RED}No GitHub repository provided, exiting.${RESET}"
             exit 1
         fi
     fi
@@ -26,18 +34,18 @@ POOL_NAME="${SAFE_REPO_NAME:0:26}-pool"
 PROVIDER_NAME="${SAFE_REPO_NAME:0:23}-provider"
 
 echo ""
-echo "About to set up Workload Identity Federation with the following configuration:"
-echo "  Project ID:             $PROJECT_ID"
-echo "  GitHub repo:            $GITHUB_REPO"
-echo "  Branch:                 $GITHUB_BRANCH"
-echo "  Workload Identity Pool: $POOL_NAME"
-echo "  OIDC Provider:          $PROVIDER_NAME"
+echo -e "${BOLD}About to set up Workload Identity Federation with the following configuration:${RESET}"
+echo -e "  ${DIM}Project ID:            ${RESET} ${CYAN}$PROJECT_ID${RESET}"
+echo -e "  ${DIM}GitHub repo:           ${RESET} ${CYAN}$GITHUB_REPO${RESET}"
+echo -e "  ${DIM}Branch:                ${RESET} ${CYAN}$GITHUB_BRANCH${RESET}"
+echo -e "  ${DIM}Workload Identity Pool:${RESET} ${CYAN}$POOL_NAME${RESET}"
+echo -e "  ${DIM}OIDC Provider:         ${RESET} ${CYAN}$PROVIDER_NAME${RESET}"
 echo ""
 read -r -p "Proceed? [y/N] " CONFIRM
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-    echo "Aborted."
-    echo "To set a custom GitHub repository, pass it as the second argument:"
-    echo "  bash setup.sh $PROJECT_ID <owner/repo>"
+    echo -e "${YELLOW}Aborted.${RESET}"
+    echo -e "To set a custom GitHub repository, pass it as the second argument:"
+    echo -e "  ${DIM}bash setup.sh $PROJECT_ID <owner/repo>${RESET}"
     exit 0
 fi
 
@@ -47,7 +55,7 @@ if ! gcloud iam workload-identity-pools describe "$POOL_NAME" --project="$PROJEC
         --location="global" \
         --display-name="GitHub Actions Pool"
 else
-    echo "Workload Identity Pool $POOL_NAME already exists, skipping"
+    echo -e "${DIM}Workload Identity Pool $POOL_NAME already exists, skipping${RESET}"
 fi
 
 if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
@@ -61,7 +69,7 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
         --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
         --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
 else
-    echo "OIDC Provider $PROVIDER_NAME already exists, skipping"
+    echo -e "${DIM}OIDC Provider $PROVIDER_NAME already exists, skipping${RESET}"
 fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
@@ -81,10 +89,11 @@ if [ "$EXISTS" -eq 0 ]; then
         --role="roles/admin" \
         --member="$PRINCIPAL"
 else
-    echo "IAM binding for $GITHUB_REPO already exists, skipping"
+    echo -e "${DIM}IAM binding for $GITHUB_REPO already exists, skipping${RESET}"
 fi
 
-echo "Workload Identity setup complete!"
 echo ""
-echo "To tear down this setup, run:"
-echo "  bash teardown.sh $PROJECT_ID"
+echo -e "${GREEN}${BOLD}Workload Identity setup complete!${RESET}"
+echo ""
+echo -e "To tear down this setup, run:"
+echo -e "  ${DIM}bash teardown.sh $PROJECT_ID${RESET}"
