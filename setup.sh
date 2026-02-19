@@ -80,12 +80,14 @@ if [ "$PROVIDER_STATE" = "NOT_FOUND" ]; then
         --issuer-uri="https://token.actions.githubusercontent.com" \
         --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
         --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
-elif [ "$PROVIDER_STATE" = "DELETED" ]; then
-    echo -e "${YELLOW}OIDC Provider $PROVIDER_NAME is deleted, undeleting...${RESET}"
-    gcloud iam workload-identity-pools providers undelete "$PROVIDER_NAME" \
-        --project="$PROJECT_ID" \
-        --location="global" \
-        --workload-identity-pool="$POOL_NAME"
+else 
+    if [ "$PROVIDER_STATE" = "DELETED" ]; then
+        echo -e "${YELLOW}OIDC Provider $PROVIDER_NAME is deleted, undeleting...${RESET}"
+        gcloud iam workload-identity-pools providers undelete "$PROVIDER_NAME" \
+            --project="$PROJECT_ID" \
+            --location="global" \
+            --workload-identity-pool="$POOL_NAME"
+    fi
     echo -e "${YELLOW}Updating provider config to ensure it is current...${RESET}"
     gcloud iam workload-identity-pools providers update-oidc "$PROVIDER_NAME" \
         --project="$PROJECT_ID" \
@@ -94,8 +96,6 @@ elif [ "$PROVIDER_STATE" = "DELETED" ]; then
         --issuer-uri="https://token.actions.githubusercontent.com" \
         --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
         --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
-else
-    echo -e "${DIM}OIDC Provider $PROVIDER_NAME already exists, skipping${RESET}"
 fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
