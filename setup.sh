@@ -49,22 +49,48 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-if ! gcloud iam workload-identity-pools describe "$POOL_NAME" --project="$PROJECT_ID" --location="global" >/dev/null 2>&1; then
+POOL_STATE=$(gcloud iam workload-identity-pools describe "$POOL_NAME" \
+    --project="$PROJECT_ID" --location="global" \
+    --format="value(state)" 2>/dev/null || echo "NOT_FOUND")
+
+if [ "$POOL_STATE" = "NOT_FOUND" ]; then
     gcloud iam workload-identity-pools create "$POOL_NAME" \
         --project="$PROJECT_ID" \
         --location="global" \
         --display-name="GitHub Actions Pool"
+elif [ "$POOL_STATE" = "DELETED" ]; then
+    echo -e "${YELLOW}Workload Identity Pool $POOL_NAME is deleted, undeleting...${RESET}"
+    gcloud iam workload-identity-pools undelete "$POOL_NAME" \
+        --project="$PROJECT_ID" \
+        --location="global"
 else
     echo -e "${DIM}Workload Identity Pool $POOL_NAME already exists, skipping${RESET}"
 fi
 
-if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
-        --project="$PROJECT_ID" --location="global" --workload-identity-pool="$POOL_NAME" >/dev/null 2>&1; then
+PROVIDER_STATE=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
+    --project="$PROJECT_ID" --location="global" --workload-identity-pool="$POOL_NAME" \
+    --format="value(state)" 2>/dev/null || echo "NOT_FOUND")
+
+if [ "$PROVIDER_STATE" = "NOT_FOUND" ]; then
     gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_NAME" \
         --project="$PROJECT_ID" \
         --location="global" \
         --workload-identity-pool="$POOL_NAME" \
         --display-name="GitHub Actions Provider" \
+        --issuer-uri="https://token.actions.githubusercontent.com" \
+        --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
+        --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
+elif [ "$PROVIDER_STATE" = "DELETED" ]; then
+    echo -e "${YELLOW}OIDC Provider $PROVIDER_NAME is deleted, undeleting...${RESET}"
+    gcloud iam workload-identity-pools providers undelete "$PROVIDER_NAME" \
+        --project="$PROJECT_ID" \
+        --location="global" \
+        --workload-identity-pool="$POOL_NAME"
+    echo -e "${YELLOW}Updating provider config to ensure it is current...${RESET}"
+    gcloud iam workload-identity-pools providers update-oidc "$PROVIDER_NAME" \
+        --project="$PROJECT_ID" \
+        --location="global" \
+        --workload-identity-pool="$POOL_NAME" \
         --issuer-uri="https://token.actions.githubusercontent.com" \
         --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
         --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
