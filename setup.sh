@@ -27,9 +27,24 @@ else
     fi
     GITHUB_REPO="$PRINT_FILE"
 fi
+
+# Normalize: if just an org name (no slash, or trailing slash only), trust all repos under that org
+if [[ "$GITHUB_REPO" =~ ^[^/]+/?$ ]]; then
+    GITHUB_REPO="${GITHUB_REPO%/}/*"
+fi
+
+# Determine attribute condition and principal format based on org-level vs repo-level
+if [[ "$GITHUB_REPO" == *"/*" ]]; then
+    ORG="${GITHUB_REPO%/*}"
+    ATTR_CONDITION="assertion.repository_owner == '${ORG}'"
+else
+    ATTR_CONDITION="assertion.repository == '${GITHUB_REPO}'"
+fi
+
 GITHUB_BRANCH="main"
 
-SAFE_REPO_NAME=$(echo "$GITHUB_REPO" | tr '[:upper:]' '[:lower:]' | tr '/_' '-')
+# Strip trailing /* for naming purposes (pool/provider names can't contain *)
+SAFE_REPO_NAME=$(echo "${GITHUB_REPO%/\*}" | tr '[:upper:]' '[:lower:]' | tr '/_' '-')
 POOL_NAME="${SAFE_REPO_NAME:0:26}-pool"
 PROVIDER_NAME="${SAFE_REPO_NAME:0:23}-provider"
 
@@ -79,7 +94,7 @@ if [ "$PROVIDER_STATE" = "NOT_FOUND" ]; then
         --display-name="GitHub Actions Provider" \
         --issuer-uri="https://token.actions.githubusercontent.com" \
         --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
-        --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
+        --attribute-condition="${ATTR_CONDITION}"
 else 
     if [ "$PROVIDER_STATE" = "DELETED" ]; then
         echo -e "${YELLOW}OIDC Provider $PROVIDER_NAME is deleted, undeleting...${RESET}"
@@ -95,11 +110,15 @@ else
         --workload-identity-pool="$POOL_NAME" \
         --issuer-uri="https://token.actions.githubusercontent.com" \
         --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
-        --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
+        --attribute-condition="${ATTR_CONDITION}"
 fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
-PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_NAME/attribute.repository/$GITHUB_REPO"
+if [[ "$GITHUB_REPO" == *"/*" ]]; then
+    PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_NAME/attribute.repository_owner/$ORG"
+else
+    PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_NAME/attribute.repository/$GITHUB_REPO"
+fi
 
 # Wait a bit to ensure the provider is fully propagated
 sleep 10
