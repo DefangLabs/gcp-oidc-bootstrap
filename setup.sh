@@ -19,7 +19,7 @@ else
 
     if [ -z "$PRINT_FILE" ]; then
         echo -e "${YELLOW}Could not detect GitHub repository from Cloud Shell history.${RESET}"
-        read -r -p "Enter the GitHub repository (e.g. owner/repo): " PRINT_FILE
+        read -r -p "Enter the GitHub access path (e.g. owner/repo/branch/main or owner): " PRINT_FILE
         if [ -z "$PRINT_FILE" ]; then
             echo -e "${RED}No GitHub repository provided, exiting.${RESET}"
             exit 1
@@ -28,31 +28,63 @@ else
     GITHUB_REPO="$PRINT_FILE"
 fi
 
-# Normalize: if just an org name (no slash, or trailing slash only), trust all repos under that org
-if [[ "$GITHUB_REPO" =~ ^[^/]+/?$ ]]; then
-    GITHUB_REPO="${GITHUB_REPO%/}/*"
-fi
+# Parse the 4-segment format: {org}/{repo}/{refType}/{refPattern}
+# Empty segments are treated as wildcards (*)
+IFS='/' read -r -a _PARTS <<< "$GITHUB_REPO"
+ORG="${_PARTS[0]:-}"
+REPO="${_PARTS[1]:-}"
+REF_TYPE="${_PARTS[2]:-}"
+REF_PATTERN="${_PARTS[3]:-}"
+unset _PARTS
 
-# Determine attribute condition and principal format based on org-level vs repo-level
-if [[ "$GITHUB_REPO" == *"/*" ]]; then
-    ORG="${GITHUB_REPO%/*}"
-    ATTR_CONDITION="assertion.repository_owner == '${ORG}'"
+[ -z "$REPO" ] && REPO="*"
+[ -z "$REF_TYPE" ] && REF_TYPE="all"
+[ -z "$REF_PATTERN" ] && REF_PATTERN="*"
+
+# Build the repository condition (org-level or specific repo)
+if [ "$REPO" = "*" ]; then
+    REPO_CONDITION="assertion.repository_owner == '${ORG}'"
 else
-    ATTR_CONDITION="assertion.repository == '${GITHUB_REPO}'"
+    REPO_CONDITION="assertion.repository == '${ORG}/${REPO}'"
 fi
 
-GITHUB_BRANCH="main"
+# Build the full attribute condition based on refType
+case "$REF_TYPE" in
+    branch)
+        if [ "$REF_PATTERN" = "*" ]; then
+            ATTR_CONDITION="$REPO_CONDITION"
+        else
+            ATTR_CONDITION="${REPO_CONDITION} && assertion.ref == 'refs/heads/${REF_PATTERN}'"
+        fi
+        ;;
+    environment)
+        if [ "$REF_PATTERN" = "*" ]; then
+            ATTR_CONDITION="$REPO_CONDITION"
+        else
+            ATTR_CONDITION="${REPO_CONDITION} && assertion.environment == '${REF_PATTERN}'"
+        fi
+        ;;
+    *)  # all or unrecognized
+        ATTR_CONDITION="$REPO_CONDITION"
+        ;;
+esac
 
-# Strip trailing /* for naming purposes (pool/provider names can't contain *)
-SAFE_REPO_NAME=$(echo "${GITHUB_REPO%/\*}" | tr '[:upper:]' '[:lower:]' | tr '/_' '-')
+# Build safe names for pool/provider (no wildcards or special chars)
+if [ "$REPO" = "*" ]; then
+    SAFE_REPO_NAME=$(echo "$ORG" | tr '[:upper:]' '[:lower:]' | tr '/_' '-')
+else
+    SAFE_REPO_NAME=$(echo "$ORG/$REPO" | tr '[:upper:]' '[:lower:]' | tr '/_' '-')
+fi
 POOL_NAME="${SAFE_REPO_NAME:0:26}-pool"
 PROVIDER_NAME="${SAFE_REPO_NAME:0:23}-provider"
 
 echo ""
 echo -e "${BOLD}About to set up Workload Identity Federation with the following configuration:${RESET}"
 echo -e "  ${DIM}Project ID:            ${RESET} ${CYAN}$PROJECT_ID${RESET}"
-echo -e "  ${DIM}GitHub repo:           ${RESET} ${CYAN}$GITHUB_REPO${RESET}"
-echo -e "  ${DIM}Branch:                ${RESET} ${CYAN}$GITHUB_BRANCH${RESET}"
+echo -e "  ${DIM}GitHub org:            ${RESET} ${CYAN}$ORG${RESET}"
+echo -e "  ${DIM}GitHub repo:           ${RESET} ${CYAN}$REPO${RESET}"
+echo -e "  ${DIM}Ref type:              ${RESET} ${CYAN}$REF_TYPE${RESET}"
+echo -e "  ${DIM}Ref pattern:           ${RESET} ${CYAN}$REF_PATTERN${RESET}"
 echo -e "  ${DIM}Workload Identity Pool:${RESET} ${CYAN}$POOL_NAME${RESET}"
 echo -e "  ${DIM}OIDC Provider:         ${RESET} ${CYAN}$PROVIDER_NAME${RESET}"
 echo ""
@@ -60,7 +92,7 @@ read -r -p "Proceed? [y/N] " CONFIRM
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     echo -e "${YELLOW}Aborted.${RESET}"
     echo -e "To set a custom GitHub repository, pass it as the second argument:"
-    echo -e "  ${DIM}bash setup.sh $PROJECT_ID <owner/repo>${RESET}"
+    echo -e "  ${DIM}bash setup.sh $PROJECT_ID <owner/repo/refType/refPattern>${RESET}"
     exit 0
 fi
 
@@ -114,10 +146,10 @@ else
 fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
-if [[ "$GITHUB_REPO" == *"/*" ]]; then
+if [ "$REPO" = "*" ]; then
     PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_NAME/attribute.repository_owner/$ORG"
 else
-    PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_NAME/attribute.repository/$GITHUB_REPO"
+    PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_NAME/attribute.repository/$ORG/$REPO"
 fi
 
 # Wait a bit to ensure the provider is fully propagated
@@ -134,7 +166,7 @@ if [ "$EXISTS" -eq 0 ]; then
         --role="roles/admin" \
         --member="$PRINCIPAL"
 else
-    echo -e "${DIM}IAM binding for $GITHUB_REPO already exists, skipping${RESET}"
+    echo -e "${DIM}IAM binding for $ORG/$REPO already exists, skipping${RESET}"
 fi
 
 echo ""
